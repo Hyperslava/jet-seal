@@ -5,7 +5,7 @@
 Проект: Реактивный тюлень
 Репозиторий: https://github.com/Jullers9/jet-seal
 Дата заморозки: -
-Версия: 0.1
+Версия: 0.2
 
 ## 1. Назначение
 
@@ -63,7 +63,8 @@ def __init__(
 - `ValueError` — name пустой.
 - `ValueError` — mass_kg, fin_length_m или max_speed_kmh ≤ 0.
 - `ValueError` — energy вне диапазона 0…100.
-- `TypeError` — name не строка или числовой параметр не число.
+- `ValueError` — mass_kg, fin_length_m, max_speed_kmh или energy не является конечным числом (NaN, ±inf).
+- `TypeError` — name не строка или числовой параметр не число (в том числе `bool`, см. 3.5).
 
 Начальное состояние: `position_km == 0`, `is_swimming == False`
 (тюлень на берегу), `depth_m == 0`, `fins_intact == True`.
@@ -82,6 +83,9 @@ def __init__(
 | is_swimming | bool | — | В воде ли тюлень |
 | depth_m | float | м | Текущая глубина (0 — на поверхности или на суше) |
 | fins_intact | bool | — | Целы ли ласты |
+
+Присваивание любому из перечисленных атрибутов вызывает `AttributeError`;
+значение атрибута и состояние тюленя при этом не меняются.
 
 ### 3.4. Методы
 
@@ -106,12 +110,11 @@ def move(self, distance_km: float, terrain: str) -> float:
   `is_swimming = False`; `depth_m = 0`.
 - По воздуху: движение невозможно.
 - Энергии ровно хватает (затраты == energy): движение разрешено, energy = 0.
-- Порядок проверок: distance_km → terrain → воздух →
-  ласты → энергия. При любом исключении состояние не меняется.
+- Порядок проверок: (1) типы аргументов → (2) конечность distance_km → (3) distance_km > 0 → (4) terrain → (5) воздух → (6) ласты → (7) энергия. При любом исключении состояние не меняется.
 
 Исключения:
-- `TypeError` — distance_km не число или terrain не строка.
-- `ValueError` — distance_km ≤ 0; terrain не из списка.
+- `TypeError` — distance_km не число (в том числе `bool`) или terrain не строка.
+- `ValueError` — distance_km не конечное число (NaN, ±inf); distance_km ≤ 0; terrain не из списка.
 - `JetSealCannotFly` — terrain == "air".
 - `JetSealNoFins` — ласты повреждены (water, ground).
 - `JetSealNoStrength` — энергии недостаточно.
@@ -132,10 +135,16 @@ def dive(self, depth_m: float) -> None:
 - Затраты энергии: `depth_m * 0.5`.
 - Погружаться можно только с поверхности воды: `is_swimming == True`
   и `depth_m == 0`.
-- Порядок проверок: depth_m → ласты → поверхность → глубина → энергия.
+- Погружение на глубину, равную `max_depth_m`, допустимо; глубже — нет.
+- Энергии ровно хватает (затраты == energy): погружение разрешено,
+  energy = 0.
+- Порядок проверок: (1) тип depth_m → (2) конечность depth_m →
+  (3) depth_m > 0 → (4) ласты → (5) поверхность → (6) глубина → (7) энергия.
+- При любом исключении состояние не меняется.
 
 Исключения:
-- `ValueError` — depth_m ≤ 0.
+- `TypeError` — depth_m не число (в том числе `bool`).
+- `ValueError` — depth_m не конечное число (NaN, ±inf); depth_m ≤ 0.
 - `JetSealNoFins` — ласты повреждены.
 - `JetSealCannotDive` — тюлень не на поверхности воды.
 - `JetSealTooDeep` — depth_m > max_depth_m.
@@ -143,12 +152,19 @@ def dive(self, depth_m: float) -> None:
 
 #### 3.4.3. surface
 
+
 ```python
 def surface(self) -> None:
 ```
 
 Назначение: всплывает на поверхность. Устанавливает `depth_m = 0`.
-Энергию не тратит. Если тюлень уже на поверхности, ничего не меняется.
+Энергию не тратит.
+
+Правила:
+- Работает при любом состоянии ласт, в том числе повреждённых.
+- Исключений не выбрасывает.
+- Если тюлень уже на поверхности воды или находится на суше
+  (`is_swimming == False`, `depth_m == 0`), состояние не меняется.
 
 #### 3.4.4. can_overcome
 
@@ -162,13 +178,19 @@ def can_overcome(self, obstacle: str) -> bool:
 Параметры: `obstacle` из `"whirlpool"`, `"reef"`, `"dam"`.
 
 Правила:
-- `"whirlpool"` — True, только если `is_swimming`, `fins_intact`
-  и `fin_length_m > 1.0`.
-- `"reef"` — True, только если `depth_m > 0` (проплывает под рифом).
-- `"dam"` — True, только если `is_swimming == False`
-  (перебирается по суше).
+- Тюлень с повреждёнными ластами не может двигаться, поэтому ни одно
+  препятствие преодолеть не может: при `fins_intact == False` всегда
+  возвращается `False`.
+- При целых ластах:
+  - `"whirlpool"` — True, только если `is_swimming` и
+    `fin_length_m > 1.0` (строго больше: при ровно 1.0 м — False).
+  - `"reef"` — True, только если `depth_m > 0` (проплывает под рифом).
+  - `"dam"` — True, только если `is_swimming == False`
+    (перебирается по суше).
 
-Исключения: `ValueError` — obstacle не из списка.
+Исключения:
+- `TypeError` — obstacle не строка.
+- `ValueError` — obstacle не из списка.
 
 #### 3.4.5. calculate_energy
 
@@ -178,8 +200,9 @@ def calculate_energy(self, distance_km: float, terrain: str) -> float:
 
 Назначение: рассчитывает затраты энергии без изменения состояния.
 Параметры и формулы — как у `move`.
-Исключения: `TypeError`, `ValueError`, `JetSealCannotFly`
-(для "air"). `JetSealNoFins` и `JetSealNoStrength` не поднимаются.
+Исключения: `TypeError`, `ValueError` (включая NaN и ±inf) — по правилам
+`move`; `JetSealCannotFly` (для "air"). `JetSealNoFins` и
+`JetSealNoStrength` не поднимаются.
 
 #### 3.4.6. refuel
 
@@ -189,7 +212,9 @@ def refuel(self, amount: float) -> None:
 
 Назначение: пополняет энергию. `amount` > 0.
 Изменяет: `energy`, не выше 100.
-Исключения: `ValueError` — amount ≤ 0.
+Исключения:
+- `TypeError` — amount не число (в том числе `bool`).
+- `ValueError` — amount не конечное число (NaN, ±inf); amount ≤ 0.
 
 #### 3.4.7. damage_fins / repair_fins
 
@@ -211,6 +236,25 @@ def get_status(self) -> dict:
 `"name"` (str), `"energy"` (float), `"position_km"` (float),
 `"is_swimming"` (bool), `"depth_m"` (float), `"fin_length_m"` (float),
 `"fins_intact"` (bool).
+
+Каждый вызов возвращает новый независимый словарь-снимок: изменение
+словаря не меняет тюленя, а последующие действия тюленя не меняют
+ранее полученный словарь.
+
+### 3.5. Общие правила
+
+Следующие правила действуют для конструктора и всех методов.
+
+1. **Типы.** Числовой аргумент — это `int` или `float`, но не `bool`.
+   Строковый аргумент — это `str`. При несоответствии типа поднимается
+   `TypeError`.
+2. **Конечность.** Числовой аргумент должен быть конечным: NaN, +inf и
+   -inf отклоняются с `ValueError` (сообщение «<параметр> must be finite»).
+3. **Порядок проверок.** Сначала проверяются типы всех аргументов
+   (`TypeError`), затем конечность и диапазон аргументов (`ValueError`),
+   затем состояние тюленя (доменные исключения). Конкретный порядок для
+   `move` и `dive` задан в разделах 3.4.1 и 3.4.2.
+4. **Атомарность.** При любом исключении состояние тюленя не меняется.
 
 ## 4. Сценарии
 
@@ -450,6 +494,11 @@ is_swimming == False, depth_m == 0
 - `refuel(1000)` при energy = 50 → energy == 100.
 - `dive(15)` при `fin_length_m = 0.5` (max_depth_m = 10) →
   `JetSealTooDeep`.
+- `dive(10)` при `energy = 5` и `fin_length_m = 1.2` → `depth_m == 10`,
+  `energy == 0` (затраты равны энергии: погружение разрешено).
+- `can_overcome("whirlpool")` при `fin_length_m = 1.0` в воде → `False`
+  (граница строгая), при `1.001` → `True`.
+- `move(float("nan"), "water")` → `ValueError` (NaN не допускается).
 
 ## 6. Исключения и иерархия
 
@@ -470,14 +519,32 @@ CrazyVehicleError
 | Ситуация | Исключение | Сообщение |
 |---|---|---|
 | Пустое имя | ValueError | "name must not be empty" |
-| Масса ≤ 0 | ValueError | "mass_kg must be positive" |
+| mass_kg ≤ 0 | ValueError | "mass_kg must be positive" |
+| fin_length_m ≤ 0 | ValueError | "fin_length_m must be positive" |
+| max_speed_kmh ≤ 0 | ValueError | "max_speed_kmh must be positive" |
+| energy вне 0…100 | ValueError | "energy must be between 0 and 100" |
+| distance_km ≤ 0 | ValueError | "distance_km must be positive" |
 | Неизвестный terrain | ValueError | "unknown terrain" |
-| Неверный тип | TypeError | "invalid argument type" |
+| depth_m ≤ 0 | ValueError | "depth_m must be positive" |
+| Неизвестный obstacle | ValueError | "unknown obstacle" |
+| amount ≤ 0 | ValueError | "amount must be positive" |
+| Числовой аргумент NaN или ±inf | ValueError | "<параметр> must be finite" |
+| Неверный тип аргумента (включая bool) | TypeError | "invalid argument type" |
 | Попытка лететь | JetSealCannotFly | "jet seal cannot fly" |
 | Не хватает энергии | JetSealNoStrength | "not enough energy: required X, have Y" |
 | Ласты повреждены | JetSealNoFins | "fins are damaged" |
 | Слишком глубоко | JetSealTooDeep | "depth exceeds maximum for fin length" |
 | Нельзя нырнуть | JetSealCannotDive | "can dive only from water surface" |
+
+Пояснения:
+- В сообщении «<параметр> must be finite» вместо «<параметр>» подставляется имя
+  параметра: mass_kg, fin_length_m, max_speed_kmh, energy, distance_km,
+  depth_m или amount.
+- В сообщении JetSealNoStrength X — требуемая, Y — имеющаяся энергия в
+  десятичной записи; целое значение допускается записывать как с дробной
+  частью `.0`, так и без неё (`20` и `20.0`).
+- Присваивание атрибуту (раздел 3.3) вызывает стандартный `AttributeError`,
+  текст его сообщения не регламентируется.
 
 ## 7. Что вне рамок
 
@@ -494,35 +561,56 @@ CrazyVehicleError
 |---|---|---|
 | Пустое имя → ValueError | 3.2 | TC-01 |
 | mass_kg, fin_length_m, max_speed_kmh ≤ 0 → ValueError | 3.2 | TC-02 |
+| NaN и ±inf в mass_kg, fin_length_m, max_speed_kmh → ValueError | 3.2, 3.5 | TC-02 |
 | energy вне 0…100 → ValueError | 3.2 | TC-03 |
-| Неверные типы → TypeError | 3.2 | TC-04 |
-| Начальное состояние, energy по умолчанию, max_depth_m | 3.2, 3.3 | TC-05 |
-| Плавание: скорость, расход, is_swimming | 3.4.1 | TC-06 |
-| Суша: скорость ×0.1, расход ×3 | 3.4.1 | TC-07 |
+| NaN и ±inf в energy → ValueError | 3.2, 3.5 | TC-03 |
+| Неверные типы (включая bool) → TypeError, конструктор | 3.2, 3.5 | TC-04 |
+| Начальное состояние, energy по умолчанию 100 | 3.2 | TC-05 |
+| max_depth_m = fin_length_m * 20 | 3.3 | TC-05 |
+| Атрибуты только для чтения: присваивание → AttributeError | 3.3 | TC-37 |
+| Плавание: скорость, расход 1 ед./км, is_swimming | 3.4.1 | TC-06 |
+| Суша: скорость ×0.1, расход 3 ед./км | 3.4.1 | TC-07 |
 | Воздух → JetSealCannotFly | 3.4.1 | TC-08 |
-| Проверка аргументов и порядок проверок | 3.4.1 | TC-09 |
-| Нехватка энергии, состояние не меняется | 3.4.1 | TC-10 |
-| Ласты повреждены → JetSealNoFins | 3.4.1 | TC-11 |
-| Энергии хватает ровно | 3.4.1 | TC-12 |
-| Глубина: вода сохраняет, суша сбрасывает | 3.4.1 | TC-13 |
-| dive: успех и расход | 3.4.2 | TC-14 |
-| dive: depth_m ≤ 0 → ValueError | 3.4.2 | TC-15 |
-| dive: ласты повреждены → NoFins | 3.4.2 | TC-16 |
-| dive: не с поверхности воды → CannotDive | 3.4.2 | TC-17 |
-| dive: глубже максимума → TooDeep, граница | 3.4.2 | TC-18 |
-| dive: нехватка энергии | 3.4.2 | TC-19 |
-| surface | 3.4.3 | TC-20 |
-| whirlpool | 3.4.4 | TC-21 |
-| reef | 3.4.4 | TC-22 |
-| dam | 3.4.4 | TC-23 |
-| Неизвестное препятствие → ValueError | 3.4.4 | TC-24 |
+| Порядок проверок: воздух раньше ласт | 3.4.1, 3.5 | TC-08 |
+| distance_km ≤ 0 → ValueError | 3.4.1 | TC-09 |
+| NaN и ±inf в distance_km → ValueError | 3.4.1, 3.5 | TC-09 |
+| Неизвестный terrain → ValueError | 3.4.1 | TC-09 |
+| Неверные типы в move → TypeError | 3.4.1, 3.5 | TC-09 |
+| Порядок проверок: тип раньше значения, distance раньше воздуха | 3.4.1, 3.5 | TC-09 |
+| Нехватка энергии → JetSealNoStrength | 3.4.1 | TC-10 |
+| Формат сообщения JetSealNoStrength: required X, have Y | 6.2 | TC-10, TC-19 |
+| Ласты повреждены → JetSealNoFins (вода, суша) | 3.4.1 | TC-11 |
+| Порядок проверок: ласты раньше энергии | 3.4.1, 3.5 | TC-11 |
+| Энергии хватает ровно: energy = 0 | 3.4.1 | TC-12 |
+| Глубина сохраняется при движении по воде, сбрасывается по суше | 3.4.1 | TC-13 |
+| dive: успех и расход 0.5 ед./м | 3.4.2 | TC-14 |
+| dive: depth_m ≤ 0 → ValueError; неверный тип → TypeError | 3.4.2, 3.5 | TC-15 |
+| dive: NaN и ±inf → ValueError | 3.4.2, 3.5 | TC-15 |
+| dive: ласты повреждены → JetSealNoFins | 3.4.2 | TC-16 |
+| Порядок проверок dive: ласты раньше поверхности | 3.4.2, 3.5 | TC-16 |
+| dive: не с поверхности воды → JetSealCannotDive | 3.4.2 | TC-17 |
+| dive: глубже максимума → JetSealTooDeep | 3.4.2 | TC-18 |
+| dive: ровно максимальная глубина допустима | 3.4.2 | TC-18 |
+| Порядок проверок dive: глубина раньше энергии | 3.4.2, 3.5 | TC-18 |
+| dive: нехватка энергии → JetSealNoStrength | 3.4.2 | TC-19 |
+| dive: энергии хватает ровно | 3.4.2 | TC-19 |
+| surface: depth_m = 0, энергия не тратится | 3.4.3 | TC-20 |
+| surface: при повреждённых ластах и на суше | 3.4.3 | TC-20 |
+| whirlpool, включая строгую границу fin_length_m > 1.0 | 3.4.4 | TC-21 |
+| reef (в том числе при повреждённых ластах) | 3.4.4 | TC-22 |
+| dam (в том числе при повреждённых ластах) | 3.4.4 | TC-23 |
+| Неизвестное препятствие → ValueError; не строка → TypeError | 3.4.4, 3.5 | TC-24 |
+| can_overcome не меняет состояние и энергию | 3.4.4 | TC-21 |
 | calculate_energy: значения, состояние не меняется | 3.4.5 | TC-25 |
-| calculate_energy: исключения | 3.4.5 | TC-26 |
+| calculate_energy: воздух, ValueError (включая NaN), TypeError; без NoFins и NoStrength | 3.4.5, 3.5 | TC-26 |
 | refuel: пополнение | 3.4.6 | TC-27 |
-| refuel: потолок 100 | 3.4.6 | TC-28 |
-| refuel: amount ≤ 0 → ValueError | 3.4.6 | TC-29 |
-| damage_fins / repair_fins | 3.4.7 | TC-30 |
-| get_status | 3.4.8 | TC-31 |
+| refuel: не выше 100 | 3.4.6 | TC-28 |
+| refuel: amount ≤ 0 → ValueError; неверный тип → TypeError | 3.4.6, 3.5 | TC-29 |
+| refuel: NaN и ±inf → ValueError | 3.4.6, 3.5 | TC-29 |
+| damage_fins, repair_fins | 3.4.7 | TC-30 |
+| get_status: 7 ключей | 3.4.8 | TC-31 |
+| get_status: независимый снимок | 3.4.8 | TC-31 |
+| Атомарность: состояние не меняется при исключении | 3.5 | TC-09, 11, 15, 16, 17, 18, 19 |
 | Сценарий 1 «Плавание» | 4.1 | TC-06 |
 | Сценарий 2 «Ползти по суше» | 4.1 | TC-07 |
 | Сценарий 3 «Не хватает энергии» | 4.1 | TC-10 |
@@ -533,11 +621,14 @@ CrazyVehicleError
 | Сценарий «Выход на берег с глубины» | 4.2 | TC-36 |
 | Граничный случай move(0,"water") | 5 | TC-09 |
 | Граничный случай move(-1,"air") | 5 | TC-09 |
-| Граничный случай move(100,"water") | 5 | TC-12 |
-| Граничный случай refuel(1000) | 5 | TC-28 |
-| Граничный случай dive(15) при fin 0.5 | 5 | TC-18 |
+| Граничный случай move(float("nan"),"water") | 5 | TC-09 |
+| Граничный случай move(100,"water") при energy = 100 | 5 | TC-12 |
+| Граничный случай refuel(1000) при energy = 50 | 5 | TC-28 |
+| Граничный случай dive(15) при fin_length_m = 0.5 | 5 | TC-18 |
+| Граничный случай dive(10) при energy = 5 | 5 | TC-19 |
+| Граничный случай whirlpool при fin_length_m = 1.0 | 5 | TC-21 |
 | Иерархия исключений | 6.1 | TC-32 |
-| Сообщения исключений | 6.2 | TC-01, 02, 04, 08, 09, 10, 11, 17, 18 (assertRaisesRegex) |
+| Сообщения исключений (таблица 6.2) | 6.2 | TC-01, 02, 03, 04, 08, 09, 10, 11, 15, 16, 17, 18, 19, 24, 29 (assertRaisesRegex) |
 
 ## 9. Открытые вопросы
 
