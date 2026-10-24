@@ -1,4 +1,4 @@
-"""Модульные тесты JetSeal: TC-01 … TC-32 (TEST_CASES.md).
+"""Модульные тесты JetSeal: TC-01 … TC-32 и TC-37 (TEST_CASES.md).
 
 Шаблон каждого теста: AAA (Arrange / Act / Assert).
 ID тест-кейса указан в имени метода и в докстринге.
@@ -16,6 +16,10 @@ from jet_seal import (
     JetSealNoStrength,
     JetSealTooDeep,
 )
+from tests.helpers import make_swimming_seal, snapshot
+
+# Специальные значения float: NaN, +inf, -inf (SPEC 3.5)
+NON_FINITE = (float("nan"), float("inf"), float("-inf"))
 
 
 def new_seal(energy=100.0, fin_length_m=1.2, max_speed_kmh=40.0):
@@ -23,41 +27,7 @@ def new_seal(energy=100.0, fin_length_m=1.2, max_speed_kmh=40.0):
     return JetSeal("Плюх", 300, fin_length_m, max_speed_kmh, energy=energy)
 
 
-def make_swimming_seal(energy=100.0, fin_length_m=1.2, max_speed_kmh=40.0):
-    """Возвращает тюленя, который уже в воде, на поверхности,
-    с заданной энергией.
-
-    По SPEC 3.2 новый тюлень стоит на берегу, а в воду он попадает только через
-    move(..., "water"). Поэтому тюлень один раз проплывает 1 км
-    (-1 ед. энергии),
-    а недостающая энергия добавляется через refuel().
-    Итог:
-    energy == energy, depth_m == 0, is_swimming == True, position_km == 1.
-    """
-    start = min(100.0, energy + 1)
-    seal = JetSeal("Тест", 100, fin_length_m, max_speed_kmh, energy=start)
-    seal.move(1, "water")
-    if seal.energy < energy:
-        seal.refuel(energy - seal.energy)
-    return seal
-
-
-def snapshot(seal):
-    """Снимок изменяемого состояния тюленя
-    (для проверок «состояние не меняется»).
-    """
-    return (
-        seal.energy,
-        seal.position_km,
-        seal.is_swimming,
-        seal.depth_m,
-        seal.fins_intact,
-    )
-
-
-# ---------------------------------------------------------------------------
 # Конструктор (SPEC 3.2, 3.3)
-# ---------------------------------------------------------------------------
 class TestConstructor(unittest.TestCase):
 
     def test_TC_01_empty_name_raises_value_error(self):
@@ -70,36 +40,55 @@ class TestConstructor(unittest.TestCase):
         """TC-02: mass_kg, fin_length_m, max_speed_kmh = 0 и -1 -> ValueError."""
         # Arrange
         base = {"mass_kg": 300, "fin_length_m": 1.2, "max_speed_kmh": 40}
-        for param in ("mass_kg", "fin_length_m", "max_speed_kmh"):
+        for param in base:
             for bad_value in (0, -1):
                 with self.subTest(param=param, value=bad_value):
                     kwargs = dict(base, **{param: bad_value})
                     # Act / Assert
-                    if param == "mass_kg":
-                        ctx = self.assertRaisesRegex(
-                            ValueError, "mass_kg must be positive"
-                        )
-                    else:
-                        ctx = self.assertRaises(ValueError)
-                    with ctx:
+                    with self.assertRaisesRegex(
+                        ValueError, f"{param} must be positive"
+                    ):
+                        JetSeal("Плюх", **kwargs)
+        # NaN и бесконечности не допускаются (SPEC 3.5)
+        for param in base:
+            for bad_value in NON_FINITE:
+                with self.subTest(param=param, value=bad_value):
+                    kwargs = dict(base, **{param: bad_value})
+                    # Act / Assert
+                    with self.assertRaisesRegex(ValueError, f"{param} must be finite"):
                         JetSeal("Плюх", **kwargs)
 
     def test_TC_03_energy_out_of_range_raises_value_error(self):
-        """TC-03: energy = -1 и 101 -> ValueError."""
+        """TC-03: energy = -1 и 101 -> ValueError; NaN и ±inf -> ValueError."""
         for bad_energy in (-1, 101):
             with self.subTest(energy=bad_energy):
                 # Act / Assert
-                with self.assertRaises(ValueError):
+                with self.assertRaisesRegex(
+                    ValueError, "energy must be between 0 and 100"
+                ):
+                    JetSeal("Плюх", 300, 1.2, 40, energy=bad_energy)
+        for bad_energy in NON_FINITE:
+            with self.subTest(energy=bad_energy):
+                # Act / Assert
+                with self.assertRaisesRegex(ValueError, "energy must be finite"):
                     JetSeal("Плюх", 300, 1.2, 40, energy=bad_energy)
 
     def test_TC_04_invalid_types_raise_type_error(self):
-        """TC-04: name=123 и mass_kg="x" -> TypeError."""
-        with self.subTest(param="name"):
+        """TC-04: name=123; числовые параметры = "x", True, None -> TypeError."""
+        # Arrange
+        base = {"mass_kg": 300, "fin_length_m": 1.2, "max_speed_kmh": 40, "energy": 100}
+        with self.subTest(param="name", value=123):
+            # Act / Assert
             with self.assertRaisesRegex(TypeError, "invalid argument type"):
-                JetSeal(123, 300, 1.2, 40)
-        with self.subTest(param="mass_kg"):
-            with self.assertRaisesRegex(TypeError, "invalid argument type"):
-                JetSeal("Плюх", "x", 1.2, 40)
+                JetSeal(123, **base)
+        for param in base:
+            # bool формально подкласс int, но числом не считается (SPEC 3.5)
+            for bad_value in ("x", True, None):
+                with self.subTest(param=param, value=bad_value):
+                    kwargs = dict(base, **{param: bad_value})
+                    # Act / Assert
+                    with self.assertRaisesRegex(TypeError, "invalid argument type"):
+                        JetSeal("Плюх", **kwargs)
 
     def test_TC_05_initial_state_and_max_depth(self):
         """TC-05: начальное состояние, energy по умолчанию, max_depth_m = 24."""
@@ -114,9 +103,7 @@ class TestConstructor(unittest.TestCase):
         self.assertAlmostEqual(seal.max_depth_m, 24.0)
 
 
-# ---------------------------------------------------------------------------
 # move (SPEC 3.4.1)
-# ---------------------------------------------------------------------------
 class TestMove(unittest.TestCase):
 
     def test_TC_06_move_water(self):
@@ -143,58 +130,67 @@ class TestMove(unittest.TestCase):
         self.assertFalse(seal.is_swimming)
 
     def test_TC_08_move_air_raises_cannot_fly(self):
-        """TC-08: полёт запрещён."""
-        # Arrange
-        seal = new_seal()
-        # Act / Assert
-        with self.assertRaisesRegex(JetSealCannotFly, "jet seal cannot fly"):
-            seal.move(1, "air")
+        """TC-08: полёт запрещён; воздух проверяется раньше ласт."""
+        for fins_damaged in (False, True):
+            with self.subTest(fins_damaged=fins_damaged):
+                # Arrange
+                seal = new_seal()
+                if fins_damaged:
+                    seal.damage_fins()
+                # Act / Assert
+                with self.assertRaisesRegex(JetSealCannotFly, "jet seal cannot fly"):
+                    seal.move(1, "air")
 
     def test_TC_09_invalid_arguments_keep_state(self):
-        """TC-09: неверные аргументы move; порядок проверок; состояние не меняется."""
+        """TC-09: неверные аргументы move; порядок: тип -> значение; состояние не меняется."""
         # Arrange
         seal = new_seal()
         before = snapshot(seal)
         cases = [
-            # (distance, terrain, исключение, regex сообщения или None)
-            (0, "water", ValueError, None),
-            (-1, "air", ValueError, None),  # distance проверяется раньше воздуха
+            # (distance, terrain, исключение, regex сообщения)
+            (0, "water", ValueError, "distance_km must be positive"),
+            (-1, "air", ValueError, "distance_km must be positive"),  # не CannotFly
             (1, "lava", ValueError, "unknown terrain"),
             ("abc", "water", TypeError, "invalid argument type"),
+            (True, "water", TypeError, "invalid argument type"),  # bool не число
+            ("abc", "lava", TypeError, "invalid argument type"),  # тип раньше значения
+            (1, 5, TypeError, "invalid argument type"),  # terrain не строка
+            (float("nan"), "water", ValueError, "distance_km must be finite"),
+            (float("inf"), "water", ValueError, "distance_km must be finite"),
         ]
         for distance, terrain, exc, pattern in cases:
             with self.subTest(distance=distance, terrain=terrain):
                 # Act / Assert
-                if pattern:
-                    ctx = self.assertRaisesRegex(exc, pattern)
-                else:
-                    ctx = self.assertRaises(exc)
-                with ctx:
+                with self.assertRaisesRegex(exc, pattern):
                     seal.move(distance, terrain)
                 self.assertEqual(snapshot(seal), before)
 
     def test_TC_10_not_enough_energy_keeps_state(self):
-        """TC-10: нехватка энергии -> JetSealNoStrength, состояние не меняется."""
+        """TC-10: нехватка энергии -> JetSealNoStrength (в сообщении 20 и 10), состояние не меняется."""
         # Arrange
         seal = new_seal(energy=10)
-        # Act / Assert
-        with self.assertRaisesRegex(JetSealNoStrength, "not enough energy"):
+        # Act / Assert: целое значение допускается с .0 и без (SPEC 6.2)
+        with self.assertRaisesRegex(
+            JetSealNoStrength,
+            r"not enough energy: required 20(\.0+)?, have 10(\.0+)?",
+        ):
             seal.move(20, "water")
         self.assertAlmostEqual(seal.energy, 10)
         self.assertAlmostEqual(seal.position_km, 0)
 
     def test_TC_11_damaged_fins_raise_no_fins(self):
-        """TC-11: ласты повреждены -> JetSealNoFins (вода и суша)."""
-        # Arrange
-        seal = new_seal()
-        seal.damage_fins()
-        before = snapshot(seal)
-        for terrain in ("water", "ground"):
-            with self.subTest(terrain=terrain):
-                # Act / Assert
-                with self.assertRaisesRegex(JetSealNoFins, "fins are damaged"):
-                    seal.move(1, terrain)
-                self.assertEqual(snapshot(seal), before)
+        """TC-11: ласты повреждены -> JetSealNoFins (вода, суша); ласты раньше энергии."""
+        for energy in (100, 0):
+            for terrain in ("water", "ground"):
+                with self.subTest(energy=energy, terrain=terrain):
+                    # Arrange
+                    seal = new_seal(energy=energy)
+                    seal.damage_fins()
+                    before = snapshot(seal)
+                    # Act / Assert
+                    with self.assertRaisesRegex(JetSealNoFins, "fins are damaged"):
+                        seal.move(1, terrain)
+                    self.assertEqual(snapshot(seal), before)
 
     def test_TC_12_exact_energy_is_enough(self):
         """TC-12: энергии хватает ровно -> движение разрешено, energy = 0."""
@@ -219,9 +215,7 @@ class TestMove(unittest.TestCase):
         self.assertAlmostEqual(seal.depth_m, 0)
 
 
-# ---------------------------------------------------------------------------
 # dive (SPEC 3.4.2)
-# ---------------------------------------------------------------------------
 class TestDive(unittest.TestCase):
 
     def test_TC_14_dive_success(self):
@@ -234,98 +228,162 @@ class TestDive(unittest.TestCase):
         self.assertAlmostEqual(seal.depth_m, 10)
         self.assertAlmostEqual(seal.energy, 95)
 
-    def test_TC_15_non_positive_depth_raises_value_error(self):
-        """TC-15: dive(0) и dive(-5) -> ValueError."""
-        # Arrange
-        seal = make_swimming_seal()
-        for bad_depth in (0, -5):
-            with self.subTest(depth=bad_depth):
+    def test_TC_15_invalid_depth_argument(self):
+        """TC-15: dive(0), dive(-5) -> ValueError; dive("5"), True, None -> TypeError."""
+        factories = {"в воде": make_swimming_seal, "на берегу": new_seal}
+        for place, factory in factories.items():
+            for bad_depth in (0, -5):
+                with self.subTest(place=place, depth=bad_depth):
+                    # Arrange
+                    seal = factory()
+                    before = snapshot(seal)
+                    # Act / Assert
+                    with self.assertRaisesRegex(ValueError, "depth_m must be positive"):
+                        seal.dive(bad_depth)
+                    self.assertEqual(snapshot(seal), before)
+        for bad_type in ("5", True, None):
+            with self.subTest(depth=bad_type):
+                # Arrange
+                seal = make_swimming_seal()
                 # Act / Assert
-                with self.assertRaises(ValueError):
-                    seal.dive(bad_depth)
+                with self.assertRaisesRegex(TypeError, "invalid argument type"):
+                    seal.dive(bad_type)
+        for bad_value in NON_FINITE:
+            with self.subTest(depth=bad_value):
+                # Arrange
+                seal = make_swimming_seal()
+                before = snapshot(seal)
+                # Act / Assert
+                with self.assertRaisesRegex(ValueError, "depth_m must be finite"):
+                    seal.dive(bad_value)
+                self.assertEqual(snapshot(seal), before)
 
     def test_TC_16_damaged_fins_raise_no_fins(self):
-        """TC-16: dive при повреждённых ластах -> JetSealNoFins."""
-        # Arrange
-        seal = make_swimming_seal()
-        seal.damage_fins()
-        # Act / Assert
-        with self.assertRaisesRegex(JetSealNoFins, "fins are damaged"):
-            seal.dive(5)
+        """TC-16: dive при повреждённых ластах -> JetSealNoFins (раньше проверки поверхности)."""
+        factories = {"в воде": make_swimming_seal, "на берегу": new_seal}
+        for place, factory in factories.items():
+            with self.subTest(place=place):
+                # Arrange
+                seal = factory()
+                seal.damage_fins()
+                before = snapshot(seal)
+                # Act / Assert
+                with self.assertRaisesRegex(JetSealNoFins, "fins are damaged"):
+                    seal.dive(5)
+                self.assertEqual(snapshot(seal), before)
 
     def test_TC_17_dive_only_from_water_surface(self):
         """TC-17: на берегу и на глубине 10 dive(5) -> JetSealCannotDive."""
         with self.subTest(case="на берегу"):
             # Arrange
             seal = new_seal()
+            before = snapshot(seal)
             # Act / Assert
             with self.assertRaisesRegex(
                 JetSealCannotDive, "can dive only from water surface"
             ):
                 seal.dive(5)
+            self.assertEqual(snapshot(seal), before)
         with self.subTest(case="в воде на глубине 10"):
             # Arrange
             seal = make_swimming_seal()
             seal.dive(10)
+            before = snapshot(seal)
             # Act / Assert
             with self.assertRaisesRegex(
                 JetSealCannotDive, "can dive only from water surface"
             ):
                 seal.dive(5)
-            self.assertAlmostEqual(seal.depth_m, 10)
+            self.assertEqual(snapshot(seal), before)
 
     def test_TC_18_too_deep_and_max_depth_boundary(self):
-        """TC-18: fin=0.5 (max 10): dive(15) -> TooDeep, затем dive(10) успешно."""
-        # Arrange
-        seal = make_swimming_seal(energy=100, fin_length_m=0.5)
-        # Act / Assert: глубже максимума
-        with self.assertRaisesRegex(
-            JetSealTooDeep, "depth exceeds maximum for fin length"
-        ):
-            seal.dive(15)
-        self.assertAlmostEqual(seal.depth_m, 0)
-        self.assertAlmostEqual(seal.energy, 100)
-        # Act / Assert: ровно максимальная глубина допустима
-        seal.dive(10)
-        self.assertAlmostEqual(seal.depth_m, 10)
-
-    def test_TC_19_dive_not_enough_energy(self):
-        """TC-19: energy = 2, dive(10) (нужно 5) -> JetSealNoStrength."""
-        # Arrange
-        seal = make_swimming_seal(energy=2)
-        # Act / Assert
-        with self.assertRaisesRegex(JetSealNoStrength, "not enough energy"):
+        """TC-18: fin=0.5 (max 10): dive(15) -> TooDeep; dive(10) успешно; TooDeep раньше NoStrength."""
+        with self.subTest(case="глубже максимума, затем ровно максимум"):
+            # Arrange
+            seal = make_swimming_seal(energy=100, fin_length_m=0.5)
+            # Act / Assert: глубже максимума
+            with self.assertRaisesRegex(
+                JetSealTooDeep, "depth exceeds maximum for fin length"
+            ):
+                seal.dive(15)
+            self.assertAlmostEqual(seal.depth_m, 0)
+            self.assertAlmostEqual(seal.energy, 100)
+            # Act / Assert: ровно максимальная глубина допустима
             seal.dive(10)
-        self.assertAlmostEqual(seal.depth_m, 0)
-        self.assertAlmostEqual(seal.energy, 2)
+            self.assertAlmostEqual(seal.depth_m, 10)
+        with self.subTest(case="энергии мало: TooDeep, а не NoStrength"):
+            # Arrange
+            seal = make_swimming_seal(energy=2, fin_length_m=0.5)
+            before = snapshot(seal)
+            # Act / Assert
+            with self.assertRaises(JetSealTooDeep):
+                seal.dive(15)
+            self.assertEqual(snapshot(seal), before)
+
+    def test_TC_19_dive_energy_shortage_and_exact_boundary(self):
+        """TC-19: energy = 2, dive(10) -> NoStrength; energy = 5, dive(10) -> успешно, energy = 0."""
+        with self.subTest(case="энергии не хватает"):
+            # Arrange
+            seal = make_swimming_seal(energy=2)
+            # Act / Assert: в сообщении требуемая (5) и доступная (2) энергия
+            with self.assertRaisesRegex(
+                JetSealNoStrength,
+                r"not enough energy: required 5(\.0+)?, have 2(\.0+)?",
+            ):
+                seal.dive(10)
+            self.assertAlmostEqual(seal.depth_m, 0)
+            self.assertAlmostEqual(seal.energy, 2)
+        with self.subTest(case="энергии хватает ровно"):
+            # Arrange
+            seal = make_swimming_seal(energy=5)
+            # Act
+            seal.dive(10)
+            # Assert
+            self.assertAlmostEqual(seal.depth_m, 10)
+            self.assertAlmostEqual(seal.energy, 0)
 
 
-# ---------------------------------------------------------------------------
 # surface (SPEC 3.4.3)
-# ---------------------------------------------------------------------------
 class TestSurface(unittest.TestCase):
 
     def test_TC_20_surface_resets_depth_for_free(self):
-        """TC-20: surface() дважды -> depth = 0, energy не тратится."""
-        # Arrange
-        seal = make_swimming_seal(energy=55)
-        seal.dive(10)  # energy: 55 -> 50
-        self.assertAlmostEqual(seal.energy, 50)
-        # Act
-        seal.surface()
-        seal.surface()
-        # Assert
-        self.assertAlmostEqual(seal.depth_m, 0)
-        self.assertAlmostEqual(seal.energy, 50)
+        """TC-20: surface() сбрасывает depth в 0 без затрат; работает при повреждённых ластах и на суше."""
+        with self.subTest(case="на глубине 10, дважды"):
+            # Arrange
+            seal = make_swimming_seal(energy=55)
+            seal.dive(10)  # energy: 55 -> 50
+            self.assertAlmostEqual(seal.energy, 50)
+            # Act
+            seal.surface()
+            seal.surface()
+            # Assert
+            self.assertAlmostEqual(seal.depth_m, 0)
+            self.assertAlmostEqual(seal.energy, 50)
+        with self.subTest(case="ласты повреждены"):
+            # Arrange
+            seal = make_swimming_seal(energy=55)
+            seal.dive(10)
+            seal.damage_fins()
+            # Act
+            seal.surface()
+            # Assert
+            self.assertAlmostEqual(seal.depth_m, 0)
+            self.assertAlmostEqual(seal.energy, 50)
+        with self.subTest(case="на берегу"):
+            # Arrange
+            seal = new_seal()
+            before = snapshot(seal)
+            # Act
+            seal.surface()
+            # Assert
+            self.assertEqual(snapshot(seal), before)
 
 
-# ---------------------------------------------------------------------------
 # can_overcome (SPEC 3.4.4)
-# ---------------------------------------------------------------------------
 class TestCanOvercome(unittest.TestCase):
 
     def test_TC_21_whirlpool(self):
-        """TC-21: водоворот: True только в воде, при целых ластах длиннее 1.0 м."""
+        """TC-21: водоворот: True только в воде, при целых ластах строго длиннее 1.0 м."""
 
         def short_fins():
             return make_swimming_seal(fin_length_m=0.6)
@@ -343,6 +401,9 @@ class TestCanOvercome(unittest.TestCase):
             ("fin=0.6, в воде", short_fins, False),
             ("на берегу", on_shore, False),
             ("ласты повреждены", damaged_fins, False),
+            # граница: правило fin_length_m > 1.0 строгое
+            ("fin=1.0 (граница)", lambda: make_swimming_seal(fin_length_m=1.0), False),
+            ("fin=1.001", lambda: make_swimming_seal(fin_length_m=1.001), True),
         ]
         for title, factory, expected in cases:
             with self.subTest(case=title):
@@ -356,35 +417,47 @@ class TestCanOvercome(unittest.TestCase):
                 self.assertEqual(snapshot(seal), before)
 
     def test_TC_22_reef(self):
-        """TC-22: риф: True только на глубине (depth > 0)."""
-        for depth, expected in ((10, True), (0, False)):
-            with self.subTest(depth=depth):
+        """TC-22: риф: True только на глубине (depth > 0) при целых ластах."""
+        for depth, damaged, expected in (
+            (10, False, True),
+            (0, False, False),
+            (10, True, False),
+        ):
+            with self.subTest(depth=depth, fins_damaged=damaged):
                 # Arrange
                 seal = make_swimming_seal()
                 if depth:
                     seal.dive(depth)
+                if damaged:
+                    seal.damage_fins()
                 # Act / Assert
                 self.assertIs(seal.can_overcome("reef"), expected)
 
     def test_TC_23_dam(self):
-        """TC-23: дамба: True только на суше."""
+        """TC-23: дамба: True только на суше при целых ластах."""
         with self.subTest(case="на берегу"):
             self.assertIs(new_seal().can_overcome("dam"), True)
         with self.subTest(case="в воде"):
             self.assertIs(make_swimming_seal().can_overcome("dam"), False)
+        with self.subTest(case="на берегу, ласты повреждены"):
+            seal = new_seal()
+            seal.damage_fins()
+            self.assertIs(seal.can_overcome("dam"), False)
 
-    def test_TC_24_unknown_obstacle_raises_value_error(self):
-        """TC-24: неизвестное препятствие -> ValueError."""
+    def test_TC_24_invalid_obstacle(self):
+        """TC-24: неизвестное препятствие -> ValueError; не строка -> TypeError."""
         # Arrange
         seal = new_seal()
-        # Act / Assert
-        with self.assertRaises(ValueError):
-            seal.can_overcome("tree")
+        with self.subTest(obstacle="tree"):
+            # Act / Assert
+            with self.assertRaisesRegex(ValueError, "unknown obstacle"):
+                seal.can_overcome("tree")
+        with self.subTest(obstacle=42):
+            with self.assertRaisesRegex(TypeError, "invalid argument type"):
+                seal.can_overcome(42)
 
 
-# ---------------------------------------------------------------------------
 # calculate_energy (SPEC 3.4.5)
-# ---------------------------------------------------------------------------
 class TestCalculateEnergy(unittest.TestCase):
 
     def test_TC_25_values_and_no_state_change(self):
@@ -419,13 +492,14 @@ class TestCalculateEnergy(unittest.TestCase):
         with self.subTest(case="distance не число"):
             with self.assertRaises(TypeError):
                 seal.calculate_energy("a", "water")
+        with self.subTest(case="distance = NaN"):
+            with self.assertRaises(ValueError):
+                seal.calculate_energy(float("nan"), "water")
         with self.subTest(case="энергии не хватает, ласты повреждены"):
             self.assertAlmostEqual(seal.calculate_energy(100, "water"), 100)
 
 
-# ---------------------------------------------------------------------------
 # refuel (SPEC 3.4.6)
-# ---------------------------------------------------------------------------
 class TestRefuel(unittest.TestCase):
 
     def test_TC_27_refuel_adds_energy(self):
@@ -446,21 +520,29 @@ class TestRefuel(unittest.TestCase):
         # Assert
         self.assertAlmostEqual(seal.energy, 100)
 
-    def test_TC_29_non_positive_amount_raises_value_error(self):
-        """TC-29: refuel(0) и refuel(-5) -> ValueError."""
+    def test_TC_29_invalid_amount(self):
+        """TC-29: refuel(0), (-5), NaN, ±inf -> ValueError; refuel(None), "5", True -> TypeError."""
         # Arrange
         seal = new_seal(energy=50)
         for bad_amount in (0, -5):
             with self.subTest(amount=bad_amount):
                 # Act / Assert
-                with self.assertRaises(ValueError):
+                with self.assertRaisesRegex(ValueError, "amount must be positive"):
                     seal.refuel(bad_amount)
+                self.assertAlmostEqual(seal.energy, 50)
+        for bad_type in (None, "5", True):
+            with self.subTest(amount=bad_type):
+                with self.assertRaisesRegex(TypeError, "invalid argument type"):
+                    seal.refuel(bad_type)
+                self.assertAlmostEqual(seal.energy, 50)
+        for bad_value in NON_FINITE:
+            with self.subTest(amount=bad_value):
+                with self.assertRaisesRegex(ValueError, "amount must be finite"):
+                    seal.refuel(bad_value)
                 self.assertAlmostEqual(seal.energy, 50)
 
 
-# ---------------------------------------------------------------------------
 # damage_fins / repair_fins (SPEC 3.4.7)
-# ---------------------------------------------------------------------------
 class TestFins(unittest.TestCase):
 
     def test_TC_30_damage_and_repair_fins(self):
@@ -475,9 +557,7 @@ class TestFins(unittest.TestCase):
         self.assertAlmostEqual(seal.energy, 50)
 
 
-# ---------------------------------------------------------------------------
 # get_status (SPEC 3.4.8)
-# ---------------------------------------------------------------------------
 class TestStatus(unittest.TestCase):
 
     EXPECTED_KEYS = {
@@ -491,7 +571,7 @@ class TestStatus(unittest.TestCase):
     }
 
     def test_TC_31_get_status_keys_and_values(self):
-        """TC-31: get_status() -> 7 ключей, значения верны."""
+        """TC-31: get_status() -> 7 ключей, значения верны, словарь — независимый снимок."""
         # Arrange
         seal = JetSeal("Плюх", 300, 1.2, 40, energy=90)
         # Act
@@ -514,10 +594,23 @@ class TestStatus(unittest.TestCase):
         self.assertAlmostEqual(status["position_km"], 10)
         self.assertIs(status["is_swimming"], True)
 
+        # Снимок независим: изменение словаря не меняет тюленя
+        status["energy"] = -1
+        self.assertAlmostEqual(seal.energy, 80)
+        self.assertAlmostEqual(seal.get_status()["energy"], 80)
 
-# ---------------------------------------------------------------------------
+        # Снимок независим: действия тюленя не меняют ранее полученный словарь
+        old_status = seal.get_status()
+        seal.move(5, "water")
+        new_status = seal.get_status()
+        self.assertIsNot(new_status, old_status)  # каждый вызов — новый словарь
+        self.assertAlmostEqual(old_status["energy"], 80)
+        self.assertAlmostEqual(old_status["position_km"], 10)
+        self.assertAlmostEqual(new_status["energy"], 75)
+        self.assertAlmostEqual(new_status["position_km"], 15)
+
+
 # Иерархия исключений (SPEC 6.1)
-# ---------------------------------------------------------------------------
 class TestExceptionHierarchy(unittest.TestCase):
 
     def test_TC_32_exception_hierarchy(self):
@@ -533,6 +626,37 @@ class TestExceptionHierarchy(unittest.TestCase):
                 self.assertTrue(issubclass(exc, JetSealError))
         self.assertTrue(issubclass(JetSealError, CrazyVehicleError))
         self.assertTrue(issubclass(CrazyVehicleError, Exception))
+
+
+# Атрибуты только для чтения (SPEC 3.3)
+class TestReadOnlyAttributes(unittest.TestCase):
+
+    # атрибут -> значение, которое пытаемся присвоить
+    ATTRIBUTES = {
+        "name": "Другое",
+        "mass_kg": 1,
+        "fin_length_m": 9.9,
+        "max_speed_kmh": 1,
+        "max_depth_m": 1,
+        "energy": -100,
+        "position_km": 999,
+        "is_swimming": True,
+        "depth_m": 5,
+        "fins_intact": True,
+    }
+
+    def test_TC_37_attributes_are_read_only(self):
+        """TC-37: присваивание любому публичному атрибуту -> AttributeError, состояние не меняется."""
+        # Arrange
+        seal = new_seal(energy=50)
+        seal.damage_fins()  # чтобы fins_intact = True было «ремонтом без ремонта»
+        before = {name: getattr(seal, name) for name in self.ATTRIBUTES}
+        for name, new_value in self.ATTRIBUTES.items():
+            with self.subTest(attribute=name):
+                # Act / Assert
+                with self.assertRaises(AttributeError):
+                    setattr(seal, name, new_value)
+                self.assertEqual(getattr(seal, name), before[name])
 
 
 if __name__ == "__main__":
