@@ -1,6 +1,6 @@
 # Test Case Specification
 
-ТЗ: `SPEC.md` v0.2. 
+ТЗ: `SPEC.md` v1.0. 
 Тип: 
 `module` — модульный тест (AAA), 
 `scenario` — сценарный тест (GWT, через Pilot).
